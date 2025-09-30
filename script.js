@@ -1,265 +1,211 @@
-// Global variables
-let model;
-let isTraining = false;
+// Global variables to store parsed data
+let movies = [];
+let ratings = [];
+let numUsers = 0;
+let numMovies = 0;
 
-// Initialize when window loads
-window.onload = async function() {
+// Using a smaller subset of data for faster training
+const MOVIES_URL = 'https://raw.githubusercontent.com/tensorflow/tfjs-examples/master/recommendation-public-data/u.item';
+const RATINGS_URL = 'https://raw.githubusercontent.com/tensorflow/tfjs-examples/master/recommendation-public-data/u.data';
+
+async function loadData() {
     try {
-        // Update status
-        updateStatus('Loading dataset (optimized for speed)...');
+        console.log('Loading movie data...');
+        const moviesResponse = await fetch(MOVIES_URL);
+        const moviesText = await moviesResponse.text();
+        movies = parseItemData(moviesText);
         
-        // Load data
-        await loadData();
-        
-        // Populate dropdowns
-        populateUserDropdown();
-        populateMovieDropdown();
-        
-        // Start training with smaller model
-        await trainModel();
-        
-    } catch (error) {
-        console.error('Initialization error:', error);
-        updateStatus('Error initializing application: ' + error.message);
-    }
-};
-
-function populateUserDropdown() {
-    const userSelect = document.getElementById('user-select');
-    userSelect.innerHTML = '';
-    
-    // Add users (limited for demo)
-    for (let i = 0; i < Math.min(50, numUsers); i++) {
-        const option = document.createElement('option');
-        option.value = i;
-        option.textContent = `User ${i + 1}`;
-        userSelect.appendChild(option);
-    }
-}
-
-function populateMovieDropdown() {
-    const movieSelect = document.getElementById('movie-select');
-    movieSelect.innerHTML = '';
-    
-    // Add movies (limited for faster loading)
-    movies.slice(0, 100).forEach(movie => {
-        const option = document.createElement('option');
-        option.value = movie.id;
-        option.textContent = movie.title.length > 50 ? movie.title.substring(0, 50) + '...' : movie.title;
-        movieSelect.appendChild(option);
-    });
-}
-
-function createModel(numUsers, numMovies, latentDim = 16) { // Reduced from 64 to 16
-    console.log(`Creating optimized model with ${numUsers} users, ${numMovies} movies, latent dimension: ${latentDim}`);
-    
-    // Input layers
-    const userInput = tf.input({shape: [1], name: 'userInput'});
-    const movieInput = tf.input({shape: [1], name: 'movieInput'});
-    
-    // Embedding Layers - smaller dimensions for speed
-    const userEmbedding = tf.layers.embedding({
-        inputDim: numUsers,
-        outputDim: latentDim,
-        name: 'userEmbedding'
-    }).apply(userInput);
-    
-    const movieEmbedding = tf.layers.embedding({
-        inputDim: numMovies,
-        outputDim: latentDim,
-        name: 'movieEmbedding'
-    }).apply(movieInput);
-    
-    // Latent Vectors
-    const userLatent = tf.layers.flatten().apply(userEmbedding);
-    const movieLatent = tf.layers.flatten().apply(movieEmbedding);
-    
-    // Prediction - simplified architecture
-    const dotProduct = tf.layers.dot({axes: 1}).apply([userLatent, movieLatent]);
-    
-    // Simple bias terms
-    const userBias = tf.layers.embedding({
-        inputDim: numUsers,
-        outputDim: 1,
-        name: 'userBias'
-    }).apply(userInput);
-    
-    const movieBias = tf.layers.embedding({
-        inputDim: numMovies,
-        outputDim: 1,
-        name: 'movieBias'
-    }).apply(movieInput);
-    
-    const flattenedUserBias = tf.layers.flatten().apply(userBias);
-    const flattenedMovieBias = tf.layers.flatten().apply(movieBias);
-    
-    // Combine and scale to 1-5 range
-    const combined = tf.layers.add().apply([dotProduct, flattenedUserBias, flattenedMovieBias]);
-    
-    // Simple scaling to rating range (1-5)
-    const ratingPrediction = tf.layers.dense({
-        units: 1,
-        activation: 'linear',
-        kernelInitializer: 'ones',
-        biasInitializer: 'zeros'
-    }).apply(combined);
-
-    // Create model
-    const model = tf.model({
-        inputs: [userInput, movieInput],
-        outputs: ratingPrediction,
-        name: 'FastMatrixFactorization'
-    });
-    
-    return model;
-}
-
-async function trainModel() {
-    try {
-        isTraining = true;
-        updateStatus('Creating optimized model for fast training...');
-        
-        // Create smaller model
-        model = createModel(numUsers, numMovies, 16); // Small latent dimension
-        
-        // Compile with higher learning rate for faster convergence
-        model.compile({
-            optimizer: tf.train.adam(0.01), // Increased learning rate
-            loss: 'meanSquaredError',
-            metrics: ['mse']
-        });
-        
-        // Use smaller subset of data for training
-        const trainingRatings = ratings.slice(0, 2000); // Use only 2000 ratings
-        
-        const userIds = trainingRatings.map(r => r.userId);
-        const movieIds = trainingRatings.map(r => r.movieId);
-        const ratingValues = trainingRatings.map(r => r.rating);
-        
-        const userTensor = tf.tensor2d(userIds, [userIds.length, 1]);
-        const movieTensor = tf.tensor2d(movieIds, [movieIds.length, 1]);
-        const ratingTensor = tf.tensor2d(ratingValues, [ratingValues.length, 1]);
-        
-        // Train for fewer epochs with larger batches
-        updateStatus('Fast training in progress...');
-        
-        await model.fit([userTensor, movieTensor], ratingTensor, {
-            epochs: 4, // Reduced from 8 to 4
-            batchSize: 256, // Larger batches
-            validationSplit: 0.1,
-            callbacks: {
-                onEpochEnd: (epoch, logs) => {
-                    console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}`);
-                    updateStatus(`Fast training ${epoch + 1}/4 - loss: ${logs.loss.toFixed(4)}`);
-                    
-                    // Enable prediction button after first epoch for immediate use
-                    if (epoch === 0) {
-                        document.getElementById('predict-btn').disabled = false;
-                        updateStatus(`Fast training ${epoch + 1}/4 - loss: ${logs.loss.toFixed(4)} - Predictions available!`);
-                    }
-                }
-            }
-        });
-        
-        // Clean up
-        tf.dispose([userTensor, movieTensor, ratingTensor]);
-        
-        document.getElementById('predict-btn').disabled = false;
-        isTraining = false;
-        
-        updateStatus('Fast training completed! Ready for predictions.');
-        
-    } catch (error) {
-        console.error('Training error:', error);
-        updateStatus('Error training model: ' + error.message);
-        isTraining = false;
-    }
-}
-
-async function predictRating() {
-    if (!model) {
-        updateResult('Model is not ready yet. Please wait...');
-        return;
-    }
-    
-    try {
-        const userSelect = document.getElementById('user-select');
-        const movieSelect = document.getElementById('movie-select');
-        
-        const userId = parseInt(userSelect.value);
-        const movieId = parseInt(movieSelect.value);
-        
-        if (isNaN(userId) || isNaN(movieId)) {
-            updateResult('Please select both a user and a movie.');
-            return;
+        if (movies.length === 0) {
+            throw new Error('No movies loaded from URL');
         }
         
-        const selectedMovie = movies.find(m => m.id === movieId);
+        // Use only first 200 movies for faster training (increased from 0 for safety)
+        const maxMovies = Math.min(200, movies.length);
+        movies = movies.slice(0, maxMovies);
+        numMovies = movies.length;
         
-        // Create input tensors
-        const userTensor = tf.tensor2d([[userId]]);
-        const movieTensor = tf.tensor2d([[movieId]]);
+        console.log('Loading rating data...');
+        const ratingsResponse = await fetch(RATINGS_URL);
+        const ratingsText = await ratingsResponse.text();
+        let allRatings = parseRatingData(ratingsText);
         
-        // Make prediction
-        const prediction = model.predict([userTensor, movieTensor]);
-        const rating = await prediction.data();
-        let predictedRating = rating[0];
+        if (allRatings.length === 0) {
+            throw new Error('No ratings loaded from URL');
+        }
         
-        // Ensure rating is in reasonable range
-        predictedRating = Math.max(0.5, Math.min(5, predictedRating));
+        // Filter ratings to only include our selected movies and first 500 users
+        ratings = allRatings.filter(r => {
+            return r.movieId < numMovies && r.userId < 500 && 
+                   !isNaN(r.userId) && !isNaN(r.movieId) && !isNaN(r.rating);
+        });
         
-        // Clean up tensors
-        tf.dispose([userTensor, movieTensor, prediction]);
+        if (ratings.length === 0) {
+            throw new Error('No valid ratings after filtering');
+        }
         
-        // Display result
-        displayRatingResult(predictedRating, selectedMovie.title);
+        // Find the maximum user ID to determine number of users
+        const maxUserId = Math.max(...ratings.map(r => r.userId));
+        numUsers = maxUserId + 1; // User IDs are 0-indexed
+        
+        console.log(`Data loaded successfully: ${numUsers} users, ${numMovies} movies, ${ratings.length} ratings`);
+        
+        return { movies, ratings, numUsers, numMovies };
         
     } catch (error) {
-        console.error('Prediction error:', error);
-        updateResult('Error making prediction: ' + error.message);
+        console.error('Error loading data from URL:', error);
+        console.log('Using fallback dummy data...');
+        return createDummyData();
     }
 }
 
-function displayRatingResult(rating, movieTitle) {
-    const resultDiv = document.getElementById('result');
+function createDummyData() {
+    console.log('Creating realistic dummy data...');
     
-    const clampedRating = Math.max(0, Math.min(5, rating));
-    const percentage = (clampedRating / 5) * 100;
+    // Create realistic dummy movies
+    movies = [
+        { id: 0, title: "The Shawshank Redemption", originalId: 1 },
+        { id: 1, title: "The Godfather", originalId: 2 },
+        { id: 2, title: "The Dark Knight", originalId: 3 },
+        { id: 3, title: "Pulp Fiction", originalId: 4 },
+        { id: 4, title: "Forrest Gump", originalId: 5 },
+        { id: 5, title: "Inception", originalId: 6 },
+        { id: 6, title: "The Matrix", originalId: 7 },
+        { id: 7, title: "Goodfellas", originalId: 8 },
+        { id: 8, title: "The Silence of the Lambs", originalId: 9 },
+        { id: 9, title: "Star Wars: A New Hope", originalId: 10 },
+        { id: 10, title: "The Lord of the Rings: Fellowship", originalId: 11 },
+        { id: 11, title: "Fight Club", originalId: 12 },
+        { id: 12, title: "The Avengers", originalId: 13 },
+        { id: 13, title: "The Social Network", originalId: 14 },
+        { id: 14, title: "The Lion King", originalId: 15 }
+    ];
+    numMovies = movies.length;
     
-    let ratingText = '';
-    if (clampedRating >= 4.5) ratingText = 'Excellent!';
-    else if (clampedRating >= 4.0) ratingText = 'Very Good';
-    else if (clampedRating >= 3.0) ratingText = 'Good';
-    else if (clampedRating >= 2.0) ratingText = 'Fair';
-    else ratingText = 'Poor';
+    // Create realistic dummy ratings with patterns
+    ratings = [];
+    numUsers = 50;
     
-    resultDiv.innerHTML = `
-        <div class="rating-display" style="color: ${getRatingColor(clampedRating)};">
-            ${clampedRating.toFixed(1)}
-        </div>
-        <div class="rating-bar">
-            <div class="rating-fill" style="width: ${percentage}%"></div>
-        </div>
-        <div class="rating-text">
-            Predicted rating for <strong>"${movieTitle}"</strong><br>
-            ${ratingText} • ${clampedRating.toFixed(1)} out of 5 stars
-        </div>
-    `;
+    // Create user preferences (action lovers, drama lovers, etc.)
+    const userPreferences = [];
+    for (let userId = 0; userId < numUsers; userId++) {
+        userPreferences[userId] = {
+            action: Math.random() * 2 - 1, // -1 to 1
+            drama: Math.random() * 2 - 1,
+            comedy: Math.random() * 2 - 1,
+            scifi: Math.random() * 2 - 1
+        };
+    }
+    
+    // Movie genres (simplified)
+    const movieGenres = [
+        { action: 0.9, drama: 0.8, comedy: 0.1, scifi: 0.2 }, // Shawshank
+        { action: 0.7, drama: 0.9, comedy: 0.3, scifi: 0.1 }, // Godfather
+        { action: 0.95, drama: 0.6, comedy: 0.2, scifi: 0.3 }, // Dark Knight
+        { action: 0.8, drama: 0.7, comedy: 0.8, scifi: 0.1 }, // Pulp Fiction
+        { action: 0.3, drama: 0.9, comedy: 0.7, scifi: 0.1 }, // Forrest Gump
+        { action: 0.8, drama: 0.6, comedy: 0.3, scifi: 0.95 }, // Inception
+        { action: 0.9, drama: 0.5, comedy: 0.2, scifi: 0.95 }, // Matrix
+        { action: 0.7, drama: 0.8, comedy: 0.4, scifi: 0.1 }, // Goodfellas
+        { action: 0.6, drama: 0.9, comedy: 0.2, scifi: 0.1 }, // Silence Lambs
+        { action: 0.8, drama: 0.5, comedy: 0.4, scifi: 0.9 }, // Star Wars
+        { action: 0.85, drama: 0.7, comedy: 0.3, scifi: 0.8 }, // Lord of Rings
+        { action: 0.7, drama: 0.6, comedy: 0.5, scifi: 0.1 }, // Fight Club
+        { action: 0.95, drama: 0.4, comedy: 0.6, scifi: 0.9 }, // Avengers
+        { action: 0.2, drama: 0.8, comedy: 0.5, scifi: 0.1 }, // Social Network
+        { action: 0.3, drama: 0.7, comedy: 0.8, scifi: 0.2 }  // Lion King
+    ];
+    
+    // Generate ratings based on user preferences and movie genres
+    for (let userId = 0; userId < numUsers; userId++) {
+        for (let movieId = 0; movieId < numMovies; movieId++) {
+            // Calculate affinity score based on dot product of preferences and genres
+            const prefs = userPreferences[userId];
+            const genres = movieGenres[movieId];
+            let affinity = 0;
+            
+            affinity += prefs.action * genres.action;
+            affinity += prefs.drama * genres.drama;
+            affinity += prefs.comedy * genres.comedy;
+            affinity += prefs.scifi * genres.scifi;
+            
+            // Convert to rating (1-5 scale)
+            let rating = 3 + affinity * 2; // Center at 3, scale by 2
+            
+            // Add some randomness
+            rating += (Math.random() - 0.5) * 1.5;
+            
+            // Clamp to 1-5 range and round
+            rating = Math.max(1, Math.min(5, rating));
+            rating = Math.round(rating * 2) / 2; // Round to nearest 0.5
+            
+            // Only include some ratings (sparse matrix simulation)
+            if (Math.random() > 0.3) { // 70% density
+                ratings.push({
+                    userId: userId,
+                    movieId: movieId,
+                    rating: rating
+                });
+            }
+        }
+    }
+    
+    console.log(`Dummy data created: ${numUsers} users, ${numMovies} movies, ${ratings.length} ratings`);
+    
+    return { movies, ratings, numUsers, numMovies };
 }
 
-function getRatingColor(rating) {
-    if (rating >= 4.0) return '#2ecc71';
-    if (rating >= 3.0) return '#f39c12';
-    if (rating >= 2.0) return '#e67e22';
-    return '#e74c3c';
+function parseItemData(text) {
+    const lines = text.split('\n');
+    const movies = [];
+    
+    for (const line of lines) {
+        if (line.trim() === '') continue;
+        
+        const parts = line.split('|');
+        if (parts.length >= 2) {
+            const movieId = parseInt(parts[0]);
+            if (isNaN(movieId)) continue;
+            
+            const title = parts[1];
+            const zeroBasedId = movieId - 1; // Convert to 0-based index
+            
+            movies[zeroBasedId] = {
+                id: zeroBasedId,
+                title: title,
+                originalId: movieId
+            };
+        }
+    }
+    
+    // Remove undefined entries and return
+    return movies.filter(movie => movie !== undefined);
 }
 
-function updateStatus(message) {
-    const statusDiv = document.getElementById('status');
-    statusDiv.innerHTML = `<span class="loading"></span>${message}`;
-}
-
-function updateResult(message) {
-    const resultDiv = document.getElementById('result');
-    resultDiv.innerHTML = `<p>${message}</p>`;
+function parseRatingData(text) {
+    const lines = text.split('\n');
+    const ratings = [];
+    
+    for (const line of lines) {
+        if (line.trim() === '') continue;
+        
+        const parts = line.split('\t');
+        if (parts.length >= 3) {
+            const userId = parseInt(parts[0]);
+            const movieId = parseInt(parts[1]);
+            const rating = parseFloat(parts[2]);
+            
+            // Validate all values
+            if (!isNaN(userId) && !isNaN(movieId) && !isNaN(rating) && 
+                userId > 0 && movieId > 0 && rating >= 1 && rating <= 5) {
+                
+                ratings.push({
+                    userId: userId - 1, // Convert to 0-based
+                    movieId: movieId - 1, // Convert to 0-based
+                    rating: rating
+                });
+            }
+        }
+    }
+    
+    return ratings;
 }
