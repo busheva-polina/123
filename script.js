@@ -5,30 +5,38 @@ let isTraining = false;
 // Initialize when window loads
 window.onload = async function() {
     try {
-        // Update status
-        updateStatus('Loading dataset (optimized for speed)...');
+        updateStatus('Loading dataset...');
         
-        // Load data
+        // Load data and wait for it to complete
         const data = await loadData();
         
-        // Validate data before proceeding
-        if (!data || data.numUsers <= 0 || data.numMovies <= 0 || data.ratings.length === 0) {
-            throw new Error('Invalid data loaded: ' + 
-                `Users: ${data.numUsers}, Movies: ${data.numMovies}, Ratings: ${data.ratings.length}`);
-        }
+        // Set global variables explicitly
+        window.movies = data.movies;
+        window.ratings = data.ratings;
+        window.numUsers = data.numUsers;
+        window.numMovies = data.numMovies;
         
-        console.log(`Data validated: ${data.numUsers} users, ${data.numMovies} movies`);
+        console.log('Data loaded:', {
+            users: window.numUsers,
+            movies: window.numMovies,
+            ratings: window.ratings.length
+        });
+        
+        // Validate data
+        if (window.numUsers <= 0 || window.numMovies <= 0 || window.ratings.length === 0) {
+            throw new Error('Invalid data loaded');
+        }
         
         // Populate dropdowns
         populateUserDropdown();
         populateMovieDropdown();
         
-        // Start training with smaller model
+        // Start training
         await trainModel();
         
     } catch (error) {
         console.error('Initialization error:', error);
-        updateStatus('Error initializing application: ' + error.message);
+        updateStatus('Error: ' + error.message);
     }
 };
 
@@ -36,9 +44,8 @@ function populateUserDropdown() {
     const userSelect = document.getElementById('user-select');
     userSelect.innerHTML = '';
     
-    // Add users (limited for demo)
-    const userCount = Math.min(30, numUsers);
-    for (let i = 0; i < userCount; i++) {
+    // Use the global numUsers variable
+    for (let i = 0; i < window.numUsers; i++) {
         const option = document.createElement('option');
         option.value = i;
         option.textContent = `User ${i + 1}`;
@@ -50,28 +57,23 @@ function populateMovieDropdown() {
     const movieSelect = document.getElementById('movie-select');
     movieSelect.innerHTML = '';
     
-    // Add movies
-    movies.forEach(movie => {
+    // Use the global movies variable
+    window.movies.forEach(movie => {
         const option = document.createElement('option');
         option.value = movie.id;
-        option.textContent = movie.title.length > 50 ? movie.title.substring(0, 50) + '...' : movie.title;
+        option.textContent = movie.title;
         movieSelect.appendChild(option);
     });
 }
 
-function createModel(numUsers, numMovies, latentDim = 16) {
-    // Validate inputs
-    if (numUsers <= 0 || numMovies <= 0 || latentDim <= 0) {
-        throw new Error(`Invalid model parameters: users=${numUsers}, movies=${numMovies}, latent=${latentDim}`);
-    }
-    
-    console.log(`Creating optimized model with ${numUsers} users, ${numMovies} movies, latent dimension: ${latentDim}`);
+function createModel(numUsers, numMovies, latentDim = 8) { // Reduced to 8 for even faster training
+    console.log(`Creating model with: ${numUsers} users, ${numMovies} movies`);
     
     // Input layers
     const userInput = tf.input({shape: [1], name: 'userInput'});
     const movieInput = tf.input({shape: [1], name: 'movieInput'});
     
-    // Embedding Layers - smaller dimensions for speed
+    // Embedding Layers
     const userEmbedding = tf.layers.embedding({
         inputDim: numUsers,
         outputDim: latentDim,
@@ -84,54 +86,18 @@ function createModel(numUsers, numMovies, latentDim = 16) {
         name: 'movieEmbedding'
     }).apply(movieInput);
     
-    // Latent Vectors
-    const userLatent = tf.layers.flatten().apply(userEmbedding);
-    const movieLatent = tf.layers.flatten().apply(movieEmbedding);
+    // Flatten embeddings
+    const userFlat = tf.layers.flatten().apply(userEmbedding);
+    const movieFlat = tf.layers.flatten().apply(movieEmbedding);
     
-    // Prediction - dot product of embeddings
-    const dotProduct = tf.layers.dot({axes: 1}).apply([userLatent, movieLatent]);
-    
-    // Add bias terms
-    const userBias = tf.layers.embedding({
-        inputDim: numUsers,
-        outputDim: 1,
-        name: 'userBias'
-    }).apply(userInput);
-    
-    const movieBias = tf.layers.embedding({
-        inputDim: numMovies,
-        outputDim: 1,
-        name: 'movieBias'
-    }).apply(movieInput);
-    
-    const flattenedUserBias = tf.layers.flatten().apply(userBias);
-    const flattenedMovieBias = tf.layers.flatten().apply(movieBias);
-    
-    // Combine everything
-    const combined = tf.layers.add().apply([dotProduct, flattenedUserBias, flattenedMovieBias]);
-    
-    // Scale output to reasonable range
-    const ratingPrediction = tf.layers.dense({
-        units: 1,
-        activation: 'sigmoid',
-        name: 'outputScaling'
-    }).apply(combined);
-    
-    const finalOutput = tf.layers.multiply().apply([
-        ratingPrediction, 
-        tf.layers.constant({value: tf.scalar(4)})
-    ]);
-    
-    const scaledOutput = tf.layers.add().apply([
-        finalOutput,
-        tf.layers.constant({value: tf.scalar(1)})
-    ]);
+    // Dot product for prediction
+    const dot = tf.layers.dot({axes: 1}).apply([userFlat, movieFlat]);
     
     // Create model
     const model = tf.model({
         inputs: [userInput, movieInput],
-        outputs: scaledOutput,
-        name: 'FastMatrixFactorization'
+        outputs: dot,
+        name: 'SimpleMatrixFactorization'
     });
     
     return model;
@@ -140,54 +106,48 @@ function createModel(numUsers, numMovies, latentDim = 16) {
 async function trainModel() {
     try {
         isTraining = true;
-        updateStatus('Creating optimized model for fast training...');
+        updateStatus('Creating model...');
         
-        // Validate global variables
-        if (numUsers <= 0 || numMovies <= 0) {
-            throw new Error(`Invalid data: users=${numUsers}, movies=${numMovies}`);
-        }
+        // Use global variables
+        const numUsers = window.numUsers;
+        const numMovies = window.numMovies;
+        const ratings = window.ratings;
         
-        // Create smaller model
-        model = createModel(numUsers, numMovies, 16);
+        console.log('Training with:', {numUsers, numMovies, ratingsCount: ratings.length});
         
-        // Compile with higher learning rate for faster convergence
+        // Create model
+        model = createModel(numUsers, numMovies, 8);
+        
+        // Compile model
         model.compile({
-            optimizer: tf.train.adam(0.01),
-            loss: 'meanSquaredError',
-            metrics: ['mse']
+            optimizer: tf.train.adam(0.1), // Higher learning rate
+            loss: 'meanSquaredError'
         });
         
-        // Use smaller subset of data for training
-        const trainingRatings = ratings.slice(0, Math.min(1000, ratings.length));
-        
-        if (trainingRatings.length === 0) {
-            throw new Error('No training data available');
-        }
-        
-        const userIds = trainingRatings.map(r => r.userId);
-        const movieIds = trainingRatings.map(r => r.movieId);
-        const ratingValues = trainingRatings.map(r => r.rating);
+        // Prepare training data
+        const userIds = ratings.map(r => r.userId);
+        const movieIds = ratings.map(r => r.movieId);
+        const ratingValues = ratings.map(r => r.rating);
         
         const userTensor = tf.tensor2d(userIds, [userIds.length, 1]);
         const movieTensor = tf.tensor2d(movieIds, [movieIds.length, 1]);
         const ratingTensor = tf.tensor2d(ratingValues, [ratingValues.length, 1]);
         
-        // Train for fewer epochs with larger batches
-        updateStatus('Fast training in progress...');
+        updateStatus('Training model (fast - 3 epochs)...');
         
+        // Train for only 3 epochs
         await model.fit([userTensor, movieTensor], ratingTensor, {
-            epochs: 4,
-            batchSize: 128,
-            validationSplit: 0.1,
+            epochs: 3,
+            batchSize: 32,
             callbacks: {
                 onEpochEnd: (epoch, logs) => {
-                    console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}`);
-                    updateStatus(`Fast training ${epoch + 1}/4 - loss: ${logs.loss.toFixed(4)}`);
+                    const currentEpoch = epoch + 1;
+                    updateStatus(`Training ${currentEpoch}/3 - Loss: ${logs.loss.toFixed(4)}`);
                     
-                    // Enable prediction button after first epoch for immediate use
+                    // Enable predictions after first epoch
                     if (epoch === 0) {
                         document.getElementById('predict-btn').disabled = false;
-                        updateStatus(`Fast training ${epoch + 1}/4 - loss: ${logs.loss.toFixed(4)} - Predictions available!`);
+                        updateStatus(`Training ${currentEpoch}/3 - Loss: ${logs.loss.toFixed(4)} - Ready for predictions!`);
                     }
                 }
             }
@@ -196,22 +156,19 @@ async function trainModel() {
         // Clean up
         tf.dispose([userTensor, movieTensor, ratingTensor]);
         
-        document.getElementById('predict-btn').disabled = false;
         isTraining = false;
-        
-        updateStatus('Fast training completed! Ready for predictions.');
+        updateStatus('Training completed! Select user and movie to predict ratings.');
         
     } catch (error) {
         console.error('Training error:', error);
-        updateStatus('Error training model: ' + error.message);
+        updateStatus('Training failed: ' + error.message);
         isTraining = false;
     }
 }
 
-// ... (rest of the functions remain the same)
 async function predictRating() {
-    if (!model) {
-        updateResult('Model is not ready yet. Please wait...');
+    if (!model || isTraining) {
+        updateResult('Model not ready. Please wait...');
         return;
     }
     
@@ -223,25 +180,26 @@ async function predictRating() {
         const movieId = parseInt(movieSelect.value);
         
         if (isNaN(userId) || isNaN(movieId)) {
-            updateResult('Please select both a user and a movie.');
+            updateResult('Please select both user and movie.');
             return;
         }
         
-        const selectedMovie = movies.find(m => m.id === movieId);
+        const selectedMovie = window.movies.find(m => m.id === movieId);
         
-        // Create input tensors
+        // Create tensors for prediction
         const userTensor = tf.tensor2d([[userId]]);
         const movieTensor = tf.tensor2d([[movieId]]);
         
-        // Make prediction
+        // Predict
         const prediction = model.predict([userTensor, movieTensor]);
-        const rating = await prediction.data();
-        let predictedRating = rating[0];
+        const ratingValue = await prediction.data();
+        let predictedRating = ratingValue[0];
         
-        // Ensure rating is in reasonable range
-        predictedRating = Math.max(0.5, Math.min(5, predictedRating));
+        // Scale and clamp the rating (since our model outputs dot product)
+        predictedRating = (predictedRating + 3) / 2; // Simple scaling
+        predictedRating = Math.max(1, Math.min(5, predictedRating));
         
-        // Clean up tensors
+        // Clean up
         tf.dispose([userTensor, movieTensor, prediction]);
         
         // Display result
@@ -249,7 +207,7 @@ async function predictRating() {
         
     } catch (error) {
         console.error('Prediction error:', error);
-        updateResult('Error making prediction: ' + error.message);
+        updateResult('Prediction error: ' + error.message);
     }
 }
 
@@ -260,8 +218,7 @@ function displayRatingResult(rating, movieTitle) {
     const percentage = (clampedRating / 5) * 100;
     
     let ratingText = '';
-    if (clampedRating >= 4.5) ratingText = 'Excellent!';
-    else if (clampedRating >= 4.0) ratingText = 'Very Good';
+    if (clampedRating >= 4.0) ratingText = 'Excellent!';
     else if (clampedRating >= 3.0) ratingText = 'Good';
     else if (clampedRating >= 2.0) ratingText = 'Fair';
     else ratingText = 'Poor';
