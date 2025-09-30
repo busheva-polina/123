@@ -66,7 +66,7 @@ function populateMovieDropdown() {
     });
 }
 
-function createModel(numUsers, numMovies, latentDim = 8) { // Reduced to 8 for even faster training
+function createModel(numUsers, numMovies, latentDim = 8) {
     console.log(`Creating model with: ${numUsers} users, ${numMovies} movies`);
     
     // Input layers
@@ -93,11 +93,43 @@ function createModel(numUsers, numMovies, latentDim = 8) { // Reduced to 8 for e
     // Dot product for prediction
     const dot = tf.layers.dot({axes: 1}).apply([userFlat, movieFlat]);
     
+    // Add bias terms
+    const userBias = tf.layers.embedding({
+        inputDim: numUsers,
+        outputDim: 1,
+        name: 'userBias'
+    }).apply(userInput);
+    
+    const movieBias = tf.layers.embedding({
+        inputDim: numMovies,
+        outputDim: 1,
+        name: 'movieBias'
+    }).apply(movieInput);
+    
+    const userBiasFlat = tf.layers.flatten().apply(userBias);
+    const movieBiasFlat = tf.layers.flatten().apply(movieBias);
+    
+    // Combine dot product with biases
+    const combined = tf.layers.add().apply([dot, userBiasFlat, movieBiasFlat]);
+    
+    // Scale output to 1-5 range using a dense layer
+    const scaledOutput = tf.layers.dense({
+        units: 1,
+        activation: 'sigmoid',
+        kernelInitializer: 'zeros',
+        biasInitializer: tf.initializers.constant({value: 3.0})
+    }).apply(combined);
+    
+    // Final scaling: sigmoid outputs 0-1, scale to 1-5
+    const finalOutput = tf.layers.lambda({
+        function: (x) => tf.mul(x, 4).add(1) // (x * 4) + 1 -> transforms 0-1 to 1-5
+    }).apply(scaledOutput);
+    
     // Create model
     const model = tf.model({
         inputs: [userInput, movieInput],
-        outputs: dot,
-        name: 'SimpleMatrixFactorization'
+        outputs: finalOutput,
+        name: 'MatrixFactorization'
     });
     
     return model;
@@ -120,8 +152,9 @@ async function trainModel() {
         
         // Compile model
         model.compile({
-            optimizer: tf.train.adam(0.1), // Higher learning rate
-            loss: 'meanSquaredError'
+            optimizer: tf.train.adam(0.01),
+            loss: 'meanSquaredError',
+            metrics: ['mse']
         });
         
         // Prepare training data
@@ -195,8 +228,7 @@ async function predictRating() {
         const ratingValue = await prediction.data();
         let predictedRating = ratingValue[0];
         
-        // Scale and clamp the rating (since our model outputs dot product)
-        predictedRating = (predictedRating + 3) / 2; // Simple scaling
+        // Ensure rating is in valid range
         predictedRating = Math.max(1, Math.min(5, predictedRating));
         
         // Clean up
