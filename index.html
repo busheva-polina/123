@@ -14,31 +14,33 @@
         </header>
 
         <main>
-            <div class="control-panel">
-                <div class="input-group">
+            <div class="card">
+                <h2>Predict Movie Ratings</h2>
+                <div class="form-group">
                     <label for="user-select">Select User:</label>
                     <select id="user-select">
                         <option value="">Loading users...</option>
                     </select>
                 </div>
-
-                <div class="input-group">
+                
+                <div class="form-group">
                     <label for="movie-select">Select Movie:</label>
                     <select id="movie-select">
                         <option value="">Loading movies...</option>
                     </select>
                 </div>
 
-                <button id="predict-btn" onclick="predictRating()" disabled>
-                    Predict Rating
-                </button>
+                <button id="predict-btn" onclick="predictRating()" disabled>Predict Rating</button>
+                
+                <div id="result" class="result-area">
+                    <p>Loading data and training model... This may take a moment.</p>
+                </div>
             </div>
 
-            <div id="status" class="status">
-                Loading data and training model...
+            <div class="card">
+                <h3>Model Status</h3>
+                <div id="training-status">Initializing...</div>
             </div>
-
-            <div id="result" class="result"></div>
         </main>
     </div>
 
