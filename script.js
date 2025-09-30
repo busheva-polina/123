@@ -154,13 +154,13 @@ async function trainModel() {
         updateStatus('Training model (this may take a few minutes)...');
         
         await model.fit([userTensor, movieTensor], ratingTensor, {
-            epochs: 8,
+            epochs: 2,
             batchSize: 128,
             validationSplit: 0.1,
             callbacks: {
                 onEpochEnd: (epoch, logs) => {
                     console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}`);
-                    updateStatus(`Training epoch ${epoch + 1}/8 - loss: ${logs.loss.toFixed(4)}`);
+                    updateStatus(`Training epoch ${epoch + 1}/2 - loss: ${logs.loss.toFixed(4)}`);
                 }
             }
         });
